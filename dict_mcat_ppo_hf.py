@@ -56,6 +56,44 @@ CRITIC_LABELS = [
     "scope_overreach","biochem_pathway_confusion","experimental_design","ok"
 ]
 
+def resolve_correct_index(answer: Any, choices: List[Any]) -> int:
+    """Resolve correct choice index from letter ('A'..), index (0- or 1-based), or exact text.
+    Fallback to 0 if unresolved.
+    """
+    n = len(choices)
+    try:
+        if isinstance(answer, str):
+            s = answer.strip()
+            # letter form
+            if len(s) == 1 and s.upper() in CHOICE_LETTERS[:n]:
+                return CHOICE_LETTERS.index(s.upper())
+            # numeric string
+            if re.fullmatch(r"\d+", s):
+                i = int(s)
+                if 0 <= i < n:
+                    return i
+                if 1 <= i <= n:
+                    return i - 1
+            # exact text match (case-sensitive first)
+            try:
+                return choices.index(answer)
+            except ValueError:
+                pass
+            # case-insensitive match
+            s_lower = s.lower()
+            for i, c in enumerate(choices):
+                if str(c).strip().lower() == s_lower:
+                    return i
+        else:
+            i = int(answer)
+            if 0 <= i < n:
+                return i
+            if 1 <= i <= n:
+                return i - 1
+    except Exception:
+        pass
+    return 0
+
 # ================= HF BACKBONE =================
 class HFBackbone(nn.Module):
     def __init__(self, name: str, dtype: str = "bf16", device: str = "cuda"):
@@ -186,7 +224,7 @@ def metric_m(outputs: List[str], items: List[Dict[str,Any]]) -> torch.Tensor:
     scores = []
     for out, it in zip(outputs, items):
         choices = it["choices"]
-        correct_idx = choices.index(it["answer"])
+        correct_idx = resolve_correct_index(it["answer"], choices)
         letter, probs, t_used = parse_model_output(out, len(choices))
         pred_idx = CHOICE_LETTERS.index(letter) if letter in CHOICE_LETTERS[:len(choices)] else -1
         correct = 1.0 if pred_idx == correct_idx else 0.0
@@ -308,7 +346,7 @@ class DiCTTrainer:
         # dashboard stats
         accs, briers, overages = [], [], []
         for it, out in zip(items, outputs):
-            choices = it["choices"]; correct_idx = choices.index(it["answer"])
+            choices = it["choices"]; correct_idx = resolve_correct_index(it["answer"], choices)
             letter, probs, t_used = parse_model_output(out, len(choices))
             pred_idx = CHOICE_LETTERS.index(letter) if letter in CHOICE_LETTERS[:len(choices)] else -1
             accs.append(1.0 if pred_idx == correct_idx else 0.0)
@@ -437,3 +475,7 @@ def iter_mcat_items(path_jsonl: str, stream: bool = True) -> Iterable[Dict[str,A
                 "passage": ex["passage"],
                 "question": ex["question"],
                 "choices": list(ex["choices"]),
+                "answer": ex["answer"],
+                "difficulty": int(ex.get("difficulty",3)),
+                "timelimit_sec": int(ex.get("timelimit_sec", CFG.default_timelimit_sec))
+            }

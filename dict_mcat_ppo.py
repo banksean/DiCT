@@ -134,6 +134,33 @@ def collate_text(batch: List[str]) -> torch.Tensor:
 # ==================== MCAT UTILITIES ====================
 CHOICE_LETTERS = ["A","B","C","D","E"]
 
+def resolve_correct_index(answer: Any, choices: List[Any]) -> int:
+    """Resolve index from letter ('A'..), index (0/1-based), or exact text; fallback 0."""
+    n = len(choices)
+    try:
+        if isinstance(answer, str):
+            s = answer.strip()
+            if len(s) == 1 and s.upper() in CHOICE_LETTERS[:n]:
+                return CHOICE_LETTERS.index(s.upper())
+            if re.fullmatch(r"\d+", s):
+                i = int(s)
+                if 0 <= i < n: return i
+                if 1 <= i <= n: return i - 1
+            try:
+                return choices.index(answer)
+            except ValueError:
+                s_lower = s.lower()
+                for i,c in enumerate(choices):
+                    if str(c).strip().lower() == s_lower:
+                        return i
+        else:
+            i = int(answer)
+            if 0 <= i < n: return i
+            if 1 <= i <= n: return i - 1
+    except Exception:
+        pass
+    return 0
+
 def format_mcat_prompt(item: Dict[str, Any]) -> str:
     sec = item["section"]
     T = item.get("timelimit_sec", CFG.default_timelimit_sec)
@@ -230,7 +257,7 @@ def metric_m(outputs: List[str], inputs: List[str]) -> torch.Tensor:
     for out, inp in zip(outputs, inputs):
         item = json.loads(inp)
         choices = item["choices"]
-        correct_idx = choices.index(item["answer"])
+        correct_idx = resolve_correct_index(item["answer"], choices)
         letter, probs, t_used = parse_model_output(out, len(choices))
         pred_idx = CHOICE_LETTERS.index(letter) if letter in CHOICE_LETTERS[:len(choices)] else -1
         correct = 1.0 if pred_idx == correct_idx else 0.0
@@ -348,7 +375,8 @@ class DiCTTrainer:
         rew_prompts, reasons = [], []
         for item, out, appr in zip(items, outputs, approval):
             letter, probs, t_used = parse_model_output(out, len(item["choices"]))
-            correct = (letter is not None and CHOICE_LETTERS.index(letter) == item["choices"].index(item["answer"]))
+            correct_idx = resolve_correct_index(item["answer"], item["choices"]) 
+            correct = (letter is not None and CHOICE_LETTERS.index(letter) == correct_idx)
             rb = rubric_check(item, out)
             reason = choose_critic_label(item, out, rb, correct)
             reasons.append(reason)
@@ -404,7 +432,7 @@ class DiCTTrainer:
         accs, briers, overages = [], [], []
         for it, out in zip(items, outputs):
             choices = it["choices"]
-            correct_idx = choices.index(it["answer"])
+            correct_idx = resolve_correct_index(it["answer"], choices)
             letter, probs, t_used = parse_model_output(out, len(choices))
             pred_idx = CHOICE_LETTERS.index(letter) if letter in CHOICE_LETTERS[:len(choices)] else -1
             accs.append(1.0 if pred_idx == correct_idx else 0.0)

@@ -17,7 +17,7 @@ The core idea:
 ## Features
 
 - **Hugging Face Transformers backbone**  
-  Loads any causal language model from the Hub (`microsoft/Phi-3-mini-4k-instruct`, `Qwen2.5-1.5B-Instruct`, etc.).
+  dict_mcat_ppo_hf.py is the primary trainer (Transformers + Datasets). dict_mcat_ppo.py is a minimal stub baseline for illustration. Loads any causal LM from the Hub (`microsoft/Phi-3-mini-4k-instruct`, `Qwen2.5-1.5B-Instruct`, etc.).
 - **MCAT-specific reward shaping**  
   - Correctness, timing penalty, and confidence calibration (Brier score).  
   - Regret loss vs. a best-known rubric baseline.  
@@ -53,17 +53,17 @@ pip install bitsandbytes  # for 4-bit loading on limited VRAM
 
 ## Dataset Format
 
-The trainer expects a JSONL file where each line is an MCAT item:
+The trainer expects a JSONL file where each line is an MCAT item. The correct answer can be provided as a letter, index, or exact choice text:
 
 ```
 {
-  "section": "CP",  // one of CP, CARS, BB, PS
+  "section": "CP",               // one of CP, CARS, BB, PS
   "passage": "Passage text here...",
   "question": "Question text here...",
   "choices": ["Choice A", "Choice B", "Choice C", "Choice D"],
-  "answer": "C",           // correct choice letter
-  "difficulty": 3,         // optional int 1–5
-  "timelimit_sec": 95      // optional per-question time limit
+  "answer": "C",                 // OR 2 (0- or 1-based index) OR "Choice C"
+  "difficulty": 3,                // optional int 1–5
+  "timelimit_sec": 95             // optional per-question time limit
 }
 ```
 
@@ -72,13 +72,14 @@ The trainer expects a JSONL file where each line is an MCAT item:
 ## Usage
 
 1. Prepare your dataset
-Place your MCAT practice set in mcat_train.jsonl (or update CFG.train_jsonl in the script).
+Place your MCAT practice set in mcat_train.jsonl (or set TRAIN_JSONL).
 
-1. Choose your base model
-Set the environment variable:
+2. Choose your base model and data path
+Set environment variables:
 
 ```bash
 export MODEL_NAME="microsoft/Phi-3-mini-4k-instruct"
+export TRAIN_JSONL="mcat_train.jsonl"
 ```
 
 You can substitute any causal LM that fits your VRAM budget.
@@ -86,7 +87,7 @@ You can substitute any causal LM that fits your VRAM budget.
 3. Run training
 
 ```bash
-python dict_mcat_ppo_hf.py
+accelerate launch dict_mcat_ppo_hf.py
 ```
 
 ---
@@ -147,26 +148,28 @@ If you use this method in academic work, please cite the concept as:
 
 ## 4-bit training on a single 12 GB GPU plug-and-play
 
-````markdown
-## Run on a 12 GB GPU (4-bit)
+### Run on a 12 GB GPU (4-bit)
 
-If you’ve got ~12 GB of VRAM (e.g., RTX 3060), run the model in **4-bit** with `bitsandbytes`.
+If you’ve got ~12 GB of VRAM (e.g., RTX 3060), run the model in 4-bit with bitsandbytes.
 
-### 1) Install deps
+Note: bitsandbytes requires a CUDA-capable GPU. On CPU-only or ROCm systems, use other quantization or smaller models.
+
+1) Install deps
+
 ```bash
 pip install bitsandbytes "transformers>=4.42" "datasets>=2.19" accelerate torch --upgrade
-````
+```
 
-### 2) (One time) Configure Accelerate
+2) (One time) Configure Accelerate
 
 ```bash
 accelerate config
 # Choose: single-GPU, no DeepSpeed, BF16 if supported, otherwise FP16.
 ```
 
-### 3) Enable 4-bit in the script
+3) Enable 4-bit in the script
 
-Open `dict_mcat_ppo_hf.py` and change the HF model load to include 4-bit. Replace the `AutoModelForCausalLM.from_pretrained(...)` call with this:
+Open dict_mcat_ppo_hf.py and change the HF model load to include 4-bit. Replace the AutoModelForCausalLM.from_pretrained(...) call with this:
 
 ```python
 from transformers import BitsAndBytesConfig
@@ -184,13 +187,13 @@ self.lm = AutoModelForCausalLM.from_pretrained(
     low_cpu_mem_usage=True,
     trust_remote_code=True,
     quantization_config=bnb_cfg,
-    device_map="auto",             # lets HF place layers across your GPU/CPU if needed
+    device_map="auto",
 )
 ```
 
-> Tip: keep `self.tok.pad_token = self.tok.eos_token` for causal LMs.
+Tip: keep `self.tok.pad_token = self.tok.eos_token` for causal LMs.
 
-### 4) Train
+4) Train
 
 ```bash
 export MODEL_NAME="microsoft/Phi-3-mini-4k-instruct"   # or another small instruct model
@@ -198,15 +201,12 @@ export TRAIN_JSONL="mcat_train.jsonl"
 accelerate launch dict_mcat_ppo_hf.py
 ```
 
-**Expected VRAM:** \~8–12 GB depending on model size and context length.
-If you OOM:
+Expected VRAM: ~8–12 GB depending on model size and context length.
+If you OOM, try:
+- lower CFG.max_new_tokens (e.g., 128)
+- reduce CFG.bsz to 1
+- or use a smaller base model (e.g., Qwen2.5-0.5B-Instruct)
 
-* lower `CFG.max_new_tokens` (e.g., 128),
-* reduce `CFG.bsz` to 1,
-* or try a smaller base model (e.g., `Qwen2.5-0.5B-Instruct`).
+Optional: LoRA fine-tuning (PEFT)
 
-### Optional: LoRA fine-tuning (PEFT)
-
-For even lower memory, layer-freeze the base model and train small **LoRA** adapters. That’s a \~5–30 MB memory delta and plays nicely with 4-bit. If you want, I can add a PEFT/LoRA variant of the script next.
-
-```
+For even lower memory, layer-freeze the base model and train small LoRA adapters. That’s a ~5–30 MB memory delta and plays nicely with 4-bit.
