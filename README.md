@@ -210,3 +210,20 @@ If you OOM, try:
 Optional: LoRA fine-tuning (PEFT)
 
 For even lower memory, layer-freeze the base model and train small LoRA adapters. That’s a ~5–30 MB memory delta and plays nicely with 4-bit.
+
+---
+
+## Validate your dataset
+
+Before training, validate your JSONL to catch schema issues early:
+
+```bash
+python validate_mcat_jsonl.py --path "$TRAIN_JSONL"
+```
+
+The validator checks:
+- required fields (section, passage, question, choices, answer)
+- section is one of CP, CARS, BB, PS
+- choices are 2–5 non-empty strings
+- answer resolves to a valid choice (letter, index 0/1-based, or exact text)
+- optional fields: difficulty in 1–5, timelimit_sec in 10–600
